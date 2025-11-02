@@ -5,28 +5,25 @@ AI Test Generator - Core test generation logic
 import os
 import re
 import time
+import subprocess
 from pathlib import Path
 from typing import Dict, List
-
-import google.generativeai as genai
 
 from .analyzer import DependencyAnalyzer
 
 
 class SmartTestGenerator:
-    """AI-powered test generator using Google Gemini with embedded systems support"""
+    """AI-powered test generator using Google Gemini CLI with embedded systems support"""
 
-    def __init__(self, api_key: str, repo_path: str = '.', redact_sensitive: bool = False):
-        genai.configure(api_key=api_key)
+    def __init__(self, repo_path: str = '.', redact_sensitive: bool = False):
         self.repo_path = repo_path
         self.redact_sensitive = redact_sensitive
 
-        # Use modern API (v0.8.0+) with gemini-2.5-flash as primary model
-        self.models_to_try = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+        # Use Gemini CLI with gemini-2.5-pro as primary model
+        self.models_to_try = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
         self.current_model_name = None
-        self.model = None
 
-        self._initialize_model()
+        self._check_cli_available()
 
         # Enhanced embedded-specific prompts
         self.embedded_prompts = {
@@ -94,76 +91,80 @@ class SmartTestGenerator:
             """
         }
 
-    def _initialize_model(self):
-        """Initialize the best available model"""
-        for model_name in self.models_to_try:
-            try:
-                self.model = genai.GenerativeModel(model_name)
-                self.current_model_name = model_name
-                print(f"✅ [OK] Using model: {model_name}")
-                break
-            except Exception as e:
-                print(f"⚠️ [WARN] Model {model_name} failed: {e}")
-                continue
-
-        if self.model is None:
-            raise Exception("No compatible Gemini model found. Please check your API key and internet connection.")
+    def _check_cli_available(self):
+        """Check if Gemini CLI is available"""
+        try:
+            result = subprocess.run(['gemini', '--help'], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                print("✅ [OK] Gemini CLI is available")
+            else:
+                raise Exception("Gemini CLI not working properly")
+        except FileNotFoundError:
+            raise Exception("Gemini CLI not found. Please install Gemini CLI.")
+        except Exception as e:
+            raise Exception(f"Gemini CLI check failed: {e}")
 
     def _try_generate_with_fallback(self, prompt: str, max_retries: int = 3):
         """Try to generate content with automatic model fallback and retry logic"""
         last_error = None
 
-        # First try with current model, with retries
-        for attempt in range(max_retries):
-            try:
-                response = self.model.generate_content(prompt)
-                return response
-            except Exception as e:
-                error_str = str(e).lower()
-                last_error = e
-
-                # Check if it's a rate limit or quota error
-                is_rate_limit = any(keyword in error_str for keyword in [
-                    'rate limit', 'quota', 'limit exceeded', 'resource exhausted',
-                    '429', 'too many requests'
-                ])
-
-                if is_rate_limit and attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + 1  # Exponential backoff: 1s, 3s, 7s
-                    print(f"⚠️ [WARN] Rate limit hit on {self.current_model_name}, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})...")
-                    time.sleep(wait_time)
-                    continue
-                elif is_rate_limit:
-                    # Rate limit persists, try fallback models
-                    print(f"⚠️ [WARN] {self.current_model_name} persistently rate limited, trying fallback models...")
-                    break
-                else:
-                    # Not a rate limit error, re-raise immediately
-                    raise e
-
-        # Try fallback models if we got here due to rate limits
-        original_model = self.current_model_name
+        # Try models in order
         for model_name in self.models_to_try:
-            if model_name == original_model:
-                continue  # Skip the model that just failed
+            self.current_model_name = model_name
+            print(f"🔄 [GEN] Trying model: {model_name}")
 
-            try:
-                print(f"🔄 [GEN] Trying fallback model: {model_name}")
-                fallback_model = genai.GenerativeModel(model_name)
-                response = fallback_model.generate_content(prompt)
+            for attempt in range(max_retries):
+                try:
+                    # Use Gemini CLI
+                    cmd = ['gemini', '--model', model_name, prompt]
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
-                # If successful, switch to this model for future requests
-                self.model = fallback_model
-                self.current_model_name = model_name
-                print(f"✅ [OK] Switched to model: {model_name}")
-                return response
+                    if result.returncode == 0:
+                        # Create a mock response object similar to API
+                        class MockResponse:
+                            def __init__(self, text):
+                                self.text = text
 
-            except Exception as fallback_error:
-                print(f"❌ [ERROR] Fallback model {model_name} also failed: {fallback_error}")
-                continue
+                        return MockResponse(result.stdout.strip())
+                    else:
+                        error_msg = result.stderr.strip() or f"CLI returned code {result.returncode}"
+                        raise Exception(f"Gemini CLI error: {error_msg}")
+
+                except subprocess.TimeoutExpired:
+                    error_msg = f"Timeout after 60s on {model_name}"
+                    print(f"⚠️ [WARN] {error_msg}, attempt {attempt + 1}/{max_retries}")
+                    last_error = Exception(error_msg)
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                        continue
+                    else:
+                        break
+                except Exception as e:
+                    error_str = str(e).lower()
+                    last_error = e
+
+                    # Check if it's a rate limit or quota error
+                    is_rate_limit = any(keyword in error_str for keyword in [
+                        'rate limit', 'quota', 'limit exceeded', 'resource exhausted',
+                        '429', 'too many requests'
+                    ])
+
+                    if is_rate_limit and attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) + 1  # Exponential backoff: 1s, 3s, 7s
+                        print(f"⚠️ [WARN] Rate limit hit on {model_name}, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})...")
+                        time.sleep(wait_time)
+                        continue
+                    elif is_rate_limit:
+                        # Rate limit persists, try next model
+                        print(f"⚠️ [WARN] {model_name} persistently rate limited, trying next model...")
+                        break
+                    else:
+                        # Not a rate limit error, try next model
+                        print(f"❌ [ERROR] Model {model_name} failed: {e}")
+                        break
 
         # If all attempts failed, raise the last error
-        raise last_error or Exception("All models failed and no fallback available")
+        raise last_error or Exception("All models failed")
 
     def build_dependency_map(self, repo_path: str) -> Dict[str, str]:
         """Build a map of function_name -> source_file for the entire repository"""

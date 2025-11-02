@@ -4,19 +4,18 @@ Test Intelligence Analyzer - Provides advanced analysis of test failures and fix
 
 import os
 import re
+import subprocess
 from typing import Dict, List, Tuple
 from pathlib import Path
 import json
-
-import google.generativeai as genai
 
 
 class TestIntelligenceAnalyzer:
     """AI-powered test intelligence analyzer for root cause identification and fix guidance"""
 
-    def __init__(self, api_key: str):
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+    def __init__(self):
+        # Use Gemini CLI
+        self.model_name = 'gemini-2.5-pro'
 
     def analyze_test_failures(self, test_results: Dict, source_files: List[str]) -> Dict:
         """
@@ -91,8 +90,13 @@ class TestIntelligenceAnalyzer:
         """
 
         try:
-            response = self.model.generate_content(analysis_prompt)
-            analysis = json.loads(response.text.strip('```json\n').strip('```'))
+            cmd = ['gemini', '--model', self.model_name, analysis_prompt]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                response_text = result.stdout.strip()
+            else:
+                raise Exception(f"Gemini CLI error: {result.stderr}")
+            analysis = json.loads(response_text.strip('```json\n').strip('```'))
         except Exception as e:
             # Fallback analysis if AI fails
             analysis = self._fallback_analysis(test_name, result)

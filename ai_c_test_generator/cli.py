@@ -27,18 +27,14 @@ from .validator import TestValidator
 def create_parser():
     """Create argument parser for the CLI tool"""
     parser = argparse.ArgumentParser(
-        description="AI-powered C unit test generator using Google Gemini",
+        description="AI-powered C unit test generator using Google Gemini CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Generate tests for all C files in current directory
-  ai-c-testgen --api-key YOUR_API_KEY
+  ai-c-testgen
 
   # Generate tests for specific directory
-  ai-c-testgen --repo-path /path/to/c/project --api-key YOUR_API_KEY
-
-  # Use environment variable for API key
-  export GEMINI_API_KEY=your_key_here
   ai-c-testgen --repo-path /path/to/c/project
 
   # Enable automatic regeneration for low-quality tests
@@ -61,12 +57,6 @@ Examples:
         type=str,
         default='tests',
         help='Output directory for generated tests (default: tests)'
-    )
-
-    parser.add_argument(
-        '--api-key',
-        type=str,
-        help='Google Gemini API key (can also use GEMINI_API_KEY env var)'
     )
 
     parser.add_argument(
@@ -142,13 +132,6 @@ def validate_environment(args):
         print(f"❌ No C files found in '{source_path}'")
         return False
 
-    # Check API key
-    api_key = args.api_key or os.getenv('GEMINI_API_KEY')
-    if not api_key:
-        print("❌ Set GEMINI_API_KEY environment variable or use --api-key")
-        print("   Get your API key from: https://makersuite.google.com/app/apikey")
-        return False
-
     return True
 
 
@@ -161,8 +144,6 @@ def main():
     if not validate_environment(args):
         sys.exit(1)
 
-    api_key = args.api_key or os.getenv('GEMINI_API_KEY')
-
     print("🚀 AI C Test Generator")
     print(f"   Repository: {args.repo_path}")
     print(f"   Source dir: {args.source_dir}")
@@ -171,8 +152,8 @@ def main():
 
     try:
         # Initialize components
-        print("🔄 [INFO] Initializing Gemini model and validator...")
-        generator = SmartTestGenerator(api_key, args.repo_path, redact_sensitive=args.redact_sensitive)
+        print("🔄 [INFO] Initializing Gemini CLI and validator...")
+        generator = SmartTestGenerator(args.repo_path, redact_sensitive=args.redact_sensitive)
         validator = TestValidator(args.repo_path)
 
         # Build dependency map
